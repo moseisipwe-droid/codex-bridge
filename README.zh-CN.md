@@ -41,7 +41,7 @@ codex-bridge 在两者之间双向转换 —— 包含流式 SSE、工具调用�
 ### 1. 配置
 
 ```bash
-git clone https://github.com/wujfeng712-ui/codex-bridge.git
+git clone https://github.com/moseisipwe-droid/codex-bridge.git
 cd codex-bridge
 cp env.example .env
 ```

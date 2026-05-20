@@ -41,7 +41,7 @@ codex-bridge는 둘 사이를 양방향으로 변환합니다 — 스트리밍 S
 ### 1. 설정
 
 ```bash
-git clone https://github.com/wujfeng712-ui/codex-bridge.git
+git clone https://github.com/moseisipwe-droid/codex-bridge.git
 cd codex-bridge
 cp env.example .env
 ```

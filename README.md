@@ -42,7 +42,7 @@ codex-bridge translates between them in both directions — streaming SSE, tool 
 ### 1. Configure
 
 ```bash
-git clone https://github.com/wujfeng712-ui/codex-bridge.git
+git clone https://github.com/moseisipwe-droid/codex-bridge.git
 cd codex-bridge
 cp env.example .env
 ```
