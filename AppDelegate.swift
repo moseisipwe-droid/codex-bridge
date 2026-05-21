@@ -163,8 +163,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
         let authPath = authDir.appendingPathComponent("auth.json")
         try? FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
-        let authContent = "{\n  \"OPENAI_API_KEY\": \"\(authKey)\"\n}\n"
+        let authContent = "{\n  \"auth_mode\": \"apikey\",\n  \"OPENAI_API_KEY\": \"\(authKey)\"\n}\n"
         try? authContent.write(to: authPath, atomically: true, encoding: .utf8)
+        // 提示用户配置 config.toml
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let alert = NSAlert()
+            alert.messageText = "配置完成"
+            alert.informativeText = "已自动写入 .env 和 auth.json。\n\n如果还没配置 Codex CLI，请编辑 ~/.codex/config.toml：\n\n[model_providers.你的供应商]\nbase_url = \"http://127.0.0.1:4000/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true"
+            alert.addButton(withTitle: "知道了")
+            alert.runModal()
+        }
         proxyManager.start()
     }
 
