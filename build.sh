@@ -18,6 +18,9 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 cp "$BUILD_DIR/CodexBridge" "$APP_BUNDLE/Contents/MacOS/"
 cp Info.plist "$APP_BUNDLE/Contents/"
+cp proxy.mjs "$APP_BUNDLE/Contents/Resources/"
+cp env.example "$APP_BUNDLE/Contents/Resources/"
+cp package.json "$APP_BUNDLE/Contents/Resources/"
 if [ -d AppIcon.iconset ]; then
     iconutil -c icns AppIcon.iconset \
         -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns" 2>/dev/null || true
@@ -26,8 +29,8 @@ fi
 echo "==> 安装到 /Applications..."
 rm -rf "/Applications/$APP_NAME.app"
 cp -R "$APP_BUNDLE" "/Applications/"
-rm -rf "/Users/mac/Desktop/$APP_NAME.app"
-cp -R "$APP_BUNDLE" "/Users/mac/Desktop/"
+cp -R "$APP_BUNDLE" "$HOME/Desktop/"
 
 echo ""
 echo "  ✅ 安装完成"
+echo "     应用: $HOME/Desktop/$APP_NAME.app"

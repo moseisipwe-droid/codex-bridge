@@ -46,6 +46,7 @@ class DashboardWindowController: NSWindowController {
     private let cardEnabledSub = NSTextField(labelWithString: "")
     // 供应商
     private let providerStack = NSStackView()
+    private let setupBanner = NSTextField(labelWithString: "")
     // 日志
     private let logTextView = NSTextView()
 
@@ -228,6 +229,11 @@ class DashboardWindowController: NSWindowController {
         headerRow.addArrangedSubview(addBtn)
 
         container.addArrangedSubview(headerRow)
+
+        setupBanner.font = NSFont.systemFont(ofSize: 11)
+        setupBanner.textColor = .secondaryLabelColor
+        setupBanner.isSelectable = true
+        container.addArrangedSubview(setupBanner)
 
         providerStack.orientation = .vertical
         providerStack.spacing = 4
@@ -626,10 +632,13 @@ class DashboardWindowController: NSWindowController {
 
     private func fetchStatus() {
         guard let url = URL(string: "\(baseURL)/admin/api/status") else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self = self, let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-            DispatchQueue.main.async { self.updateStatus(json) }
+        URLSession.shared.dataTask(with: url) { [weak self] data, resp, _ in
+            guard let self = self else { return }
+            if let data = data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                DispatchQueue.main.async { self.updateStatus(json) }
+            } else {
+                DispatchQueue.main.async { self.showSetupBanner() }
+            }
         }.resume()
     }
 
@@ -642,8 +651,15 @@ class DashboardWindowController: NSWindowController {
         }.resume()
     }
 
+    private func showSetupBanner() {
+        statusDot.layer?.backgroundColor = NSColor.systemRed.cgColor
+        statusText.stringValue = "代理未运行"
+        setupBanner.stringValue = "首次使用？编辑 ~/.codex/codex-bridge/.env 填入 API Key，然后点击菜单栏 → 启动代理"
+    }
+
     private func updateStatus(_ d: [String: Any]) {
         statusDot.layer?.backgroundColor = NSColor.systemGreen.cgColor
+        setupBanner.stringValue = ""
 
         let p = d["port"] as? String ?? "4000"
         statusText.stringValue = ":\(p) · 运行中"
@@ -674,7 +690,7 @@ class DashboardWindowController: NSWindowController {
 
         let configured = configs.filter { ($0.value["configured"] as? Bool) == true }
         if configured.isEmpty {
-            let empty = NSTextField(labelWithString: "无已配置的供应商")
+            let empty = NSTextField(labelWithString: "无已配置的供应商 — 点击 + 添加")
             empty.font = NSFont.systemFont(ofSize: 11)
             empty.textColor = .secondaryLabelColor
             providerStack.addArrangedSubview(empty)

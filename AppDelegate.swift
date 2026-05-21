@@ -15,15 +15,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         windowItem = menu.addItem(withTitle: "显示窗口", action: #selector(toggleWindow), keyEquivalent: "w")
         windowItem.target = self
         menu.addItem(.separator())
-        toggleItem = menu.addItem(withTitle: "停止代理", action: #selector(toggleProxy), keyEquivalent: "s")
+        toggleItem = menu.addItem(withTitle: "启动代理", action: #selector(toggleProxy), keyEquivalent: "s")
         toggleItem.target = self
+        menu.addItem(.separator())
+        let envItem = menu.addItem(withTitle: "编辑 .env", action: #selector(openEnv), keyEquivalent: "e")
+        envItem.target = self
         menu.addItem(.separator())
         let quitItem = menu.addItem(withTitle: "退出", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         statusItem.menu = menu
 
         proxyManager.onLogOutput = { print("[proxy]", $0) }
-        proxyManager.start()
+        if proxyManager.ensureResources() {
+            proxyManager.start()
+        }
 
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             self?.checkHealth()
@@ -54,6 +59,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             toggleItem.title = "停止代理"
             statusItem.button?.title = "🟡"
         }
+    }
+
+    @objc private func openEnv() {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/codex-bridge/.env")
+        NSWorkspace.shared.open(dir)
     }
 
     @objc private func quitApp() {

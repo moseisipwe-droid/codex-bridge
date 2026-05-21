@@ -1,27 +1,49 @@
 import Foundation
+import AppKit
 
 class ProxyManager {
     private var process: Process?
     var onLogOutput: ((String) -> Void)?
     var isRunning: Bool { process?.isRunning ?? false }
     private var shouldAutoRestart = true
+    
+    /// 代理工作目录 ~/.codex/codex-bridge/
+    private var workDir: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/codex-bridge")
+    }
+    private var envPath: URL { workDir.appendingPathComponent(".env") }
+    private var proxyPath: URL { workDir.appendingPathComponent("proxy.mjs") }
 
-    private func debugLog(_ msg: String) {
-        print("[ProxyManager]", msg)
-        // Also write to a file in /tmp
-        let line = "[ProxyManager] \(msg)\n"
-        if let data = line.data(using: .utf8) {
-            let url = URL(fileURLWithPath: "/tmp/codex-debug.log")
-            if FileManager.default.fileExists(atPath: url.path) {
-                if let handle = try? FileHandle(forWritingTo: url) {
-                    handle.seekToEndOfFile()
-                    handle.write(data)
-                    if #available(macOS 10.15, *) { try? handle.close() }
-                }
-            } else {
-                try? data.write(to: url)
-            }
+    /// 首次部署资源（从 app bundle → ~/.codex/codex-bridge/）
+    /// - returns: true 表示 .env 已就绪可启动；false 需要用户配置
+    func ensureResources() -> Bool {
+        let fm = FileManager.default
+        // 创建目录
+        try? fm.createDirectory(at: workDir, withIntermediateDirectories: true)
+        // 部署 proxy.mjs（每次覆盖，保持更新）
+        if let bundledProxy = Bundle.main.url(forResource: "proxy", withExtension: "mjs") {
+            try? fm.removeItem(at: proxyPath)
+            try? fm.copyItem(at: bundledProxy, to: proxyPath)
         }
+        // 部署 package.json
+        if let bundledPkg = Bundle.main.url(forResource: "package", withExtension: "json"),
+           !fm.fileExists(atPath: workDir.appendingPathComponent("package.json").path) {
+            try? fm.copyItem(at: bundledPkg, to: workDir.appendingPathComponent("package.json"))
+        }
+        // 部署 .env（仅首次）
+        if !fm.fileExists(atPath: envPath.path) {
+            if let bundledEnv = Bundle.main.url(forResource: "env", withExtension: "example") {
+                try? fm.copyItem(at: bundledEnv, to: envPath)
+            }
+            return false
+        }
+        // 检查 .env 是否已配置（至少替换了占位符）
+        guard let content = try? String(contentsOf: envPath, encoding: .utf8) else { return false }
+        if content.contains("your-deepseek-key-here") || content.contains("replace-with-48-char-hex") {
+            return false
+        }
+        return true
     }
 
     func start() {
@@ -29,24 +51,53 @@ class ProxyManager {
         shouldAutoRestart = true
         stop()
 
+        // 0. 部署资源
+        let ready = ensureResources()
+        if !ready {
+            onLogOutput?("[setup] .env 未配置，请在设置中填写 API Key")
+            debugLog(".env not configured")
+            // 弹窗提示
+            DispatchQueue.main.async { [self] in
+                let alert = NSAlert()
+                alert.messageText = "需要配置 API Key"
+                alert.informativeText = "首次使用需要在 .env 文件中填入你的 API Key。\n\n配置文件位置:\n\(envPath.path)\n\n填写后点击\"启动代理\"继续。"
+                alert.addButton(withTitle: "打开 .env")
+                alert.addButton(withTitle: "稍后设置")
+                let resp = alert.runModal()
+                if resp == .alertFirstButtonReturn {
+                    NSWorkspace.shared.open(envPath)
+                }
+            }
+            return
+        }
+
+        // 1. 找 Node.js
         guard let nodePath = findNode() else {
             debugLog("ERROR: Node.js not found")
             onLogOutput?("错误: 未找到 Node.js")
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "未找到 Node.js"
+                alert.informativeText = "Codex Bridge 需要 Node.js 18+ 才能运行。\n请先安装: brew install node"
+                alert.addButton(withTitle: "安装指导")
+                alert.addButton(withTitle: "取消")
+                let resp = alert.runModal()
+                if resp == .alertFirstButtonReturn {
+                    NSWorkspace.shared.open(URL(string: "https://nodejs.org")!)
+                }
+            }
             return
         }
         debugLog("node path: \(nodePath)")
+        debugLog("proxy dir: \(workDir.path)")
 
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/codex-bridge")
-        debugLog("proxy dir: \(dir.path)")
-
+        // 2. 启动进程
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: nodePath)
-        proc.arguments = ["--env-file=\(dir.path)/.env", "\(dir.path)/proxy.mjs"]
-        proc.currentDirectoryURL = dir
+        proc.arguments = ["--env-file=\(envPath.path)", proxyPath.path]
+        proc.currentDirectoryURL = workDir
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
-        // 从 shell 继承 SSL 证书变量（GUI 应用 launchd 环境不包含 .zshrc 里的变量）
         if env["NODE_EXTRA_CA_CERTS"] == nil {
             let knownPaths = ["/etc/ssl/cert.pem", "/usr/local/etc/openssl/cert.pem", "/opt/homebrew/etc/openssl@3/cert.pem"]
             for p in knownPaths {
@@ -113,6 +164,25 @@ class ProxyManager {
             }
         }
         process = nil
+    }
+
+    // MARK: - Private
+
+    private func debugLog(_ msg: String) {
+        print("[ProxyManager]", msg)
+        let line = "[ProxyManager] \(msg)\n"
+        if let data = line.data(using: .utf8) {
+            let url = URL(fileURLWithPath: "/tmp/codex-debug.log")
+            if FileManager.default.fileExists(atPath: url.path) {
+                if let handle = try? FileHandle(forWritingTo: url) {
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                    if #available(macOS 10.15, *) { try? handle.close() }
+                }
+            } else {
+                try? data.write(to: url)
+            }
+        }
     }
 
     private func findNode() -> String? {

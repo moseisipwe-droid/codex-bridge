@@ -56,38 +56,37 @@ DeepSeek、小米 MiMo、OpenAI 等 20+ 主流大模型供应商。
 
 ## 快速开始
 
-### 1. 下载
+### 安装
+
+**方式一：下载 App（推荐）**
+
+从 [Releases](https://github.com/moseisipwe-droid/codex-bridge/releases) 下载最新版 `Codex Bridge.app`，拖入 `/Applications` 打开即可。
+
+**方式二：从源码构建**
 
 ```bash
 git clone https://github.com/moseisipwe-droid/codex-bridge.git
 cd codex-bridge
-```
-
-### 2. 配置环境变量
-
-```bash
-cp env.example .env
-```
-
-编辑 `.env`，至少设置：
-
-```bash
-PROXY_AUTH_KEY=sk-proxy-local-$(openssl rand -hex 24)
-DEEPSEEK_API_KEY=sk-...
-```
-
-### 3. 构建并运行
-
-```bash
 ./build.sh
-open Codex\ Bridge.app
+open build/Codex\ Bridge.app
 ```
 
-### 4. 配置 Codex CLI
+### 首次启动
 
-编辑 `~/.codex/config.toml`：
+1. **前提条件**：安装 [Node.js](https://nodejs.org) 18+
+2. 打开 Codex Bridge → 菜单栏出现 🟡 图标
+3. 首次运行会自动弹出配置引导，或手动编辑：
+   ```bash
+   # ~/.codex/codex-bridge/.env
+   PROXY_AUTH_KEY=sk-proxy-local-$(openssl rand -hex 24)
+   DEEPSEEK_API_KEY=sk-...   # 你的 API Key
+   ```
+4. 点击菜单栏图标 → **启动代理**
+
+### 配置 Codex CLI
 
 ```toml
+# ~/.codex/config.toml
 model = "deepseek-v4-flash"
 model_provider = "local_proxy"
 
@@ -98,15 +97,12 @@ wire_api = "responses"
 requires_openai_auth = true
 ```
 
-`~/.codex/auth.json`：
-
 ```json
+// ~/.codex/auth.json
 { "OPENAI_API_KEY": "<同 .env 中的 PROXY_AUTH_KEY>" }
 ```
 
-### 5. 启动
-
-运行 `codex`，然后点击菜单栏图标 → **启动代理**。
+运行 `codex`，开始使用。
 
 ## 项目结构
 
