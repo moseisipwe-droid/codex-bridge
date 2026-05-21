@@ -40,7 +40,7 @@ class ProxyManager {
         }
         // 检查 .env 是否已配置（至少替换了占位符）
         guard let content = try? String(contentsOf: envPath, encoding: .utf8) else { return false }
-        if content.contains("your-deepseek-key-here") || content.contains("replace-with-48-char-hex") {
+        if content.contains("your-deepseek-key-here") || content.contains("replace-with-48-char-hex") || !content.contains("MY_DS_KEY") {
             return false
         }
         return true
@@ -54,20 +54,8 @@ class ProxyManager {
         // 0. 部署资源
         let ready = ensureResources()
         if !ready {
-            onLogOutput?("[setup] .env 未配置，请在设置中填写 API Key")
+            onLogOutput?("[setup] .env 未配置或包含占位符，请先配置 API Key")
             debugLog(".env not configured")
-            // 弹窗提示
-            DispatchQueue.main.async { [self] in
-                let alert = NSAlert()
-                alert.messageText = "需要配置 API Key"
-                alert.informativeText = "首次使用需要在 .env 文件中填入你的 API Key。\n\n配置文件位置:\n\(envPath.path)\n\n填写后点击\"启动代理\"继续。"
-                alert.addButton(withTitle: "打开 .env")
-                alert.addButton(withTitle: "稍后设置")
-                let resp = alert.runModal()
-                if resp == .alertFirstButtonReturn {
-                    NSWorkspace.shared.open(envPath)
-                }
-            }
             return
         }
 
