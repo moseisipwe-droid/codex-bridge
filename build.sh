@@ -26,6 +26,9 @@ if [ -d AppIcon.iconset ]; then
         -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns" 2>/dev/null || true
 fi
 
+echo "==> 签名..."
+codesign -s - -f --deep "$APP_BUNDLE" 2>/dev/null || true
+
 echo "==> 安装到 /Applications..."
 rm -rf "/Applications/$APP_NAME.app"
 cp -R "$APP_BUNDLE" "/Applications/"
