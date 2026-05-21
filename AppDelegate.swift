@@ -4,8 +4,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var toggleItem: NSMenuItem!
     private var windowItem: NSMenuItem!
+    private var routeItem: NSMenuItem!
+    private var switchProxyItem: NSMenuItem!
+    private var switchGPTItem: NSMenuItem!
     private let proxyManager = ProxyManager()
     private let dashboard = DashboardWindowController()
+    private let codexConfig = CodexConfigManager()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -15,7 +19,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         windowItem = menu.addItem(withTitle: "显示窗口", action: #selector(toggleWindow), keyEquivalent: "w")
         windowItem.target = self
         menu.addItem(.separator())
-        toggleItem = menu.addItem(withTitle: "启动代理", action: #selector(toggleProxy), keyEquivalent: "s")
+        routeItem = menu.addItem(withTitle: "Codex: 读取中...", action: nil, keyEquivalent: "")
+        routeItem.isEnabled = false
+        switchProxyItem = menu.addItem(withTitle: "使用代理模型", action: #selector(switchToProxyRoute), keyEquivalent: "p")
+        switchProxyItem.target = self
+        switchGPTItem = menu.addItem(withTitle: "切换到 GPT", action: #selector(switchToGPTRoute), keyEquivalent: "g")
+        switchGPTItem.target = self
+        menu.addItem(.separator())
+        toggleItem = menu.addItem(withTitle: "启动代理并切到代理", action: #selector(toggleProxy), keyEquivalent: "s")
         toggleItem.target = self
         menu.addItem(.separator())
         let envItem = menu.addItem(withTitle: "编辑 .env", action: #selector(openEnv), keyEquivalent: "e")
@@ -27,7 +38,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         proxyManager.onLogOutput = { print("[proxy]", $0) }
         if proxyManager.ensureResources() {
-            proxyManager.start()
+            if codexConfig.currentRoute().isProxy {
+                startProxyOnly()
+            } else {
+                updateRouteMenu(proxyHealthy: false)
+            }
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [self] in
                 showSetupDialog()
@@ -43,6 +58,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         proxyManager.stop()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if proxyManager.isRunning && codexConfig.currentRoute().isProxy {
+            let alert = NSAlert()
+            alert.messageText = "代理正在使用中"
+            alert.informativeText = "退出 Codex Bridge 会停止本地代理，正在使用代理模型的 Codex 会话会断开。"
+            alert.addButton(withTitle: "取消")
+            alert.addButton(withTitle: "停止代理并切回 GPT")
+            let resp = alert.runModal()
+            if resp == .alertFirstButtonReturn {
+                return .terminateCancel
+            }
+            stopProxyAndRestoreGPT(showErrors: false)
+        }
+        return .terminateNow
+    }
+
     @objc private func toggleWindow() {
         if dashboard.window?.isVisible ?? false {
             dashboard.hideDashboard()
@@ -55,14 +86,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleProxy() {
         if proxyManager.isRunning {
-            proxyManager.stop()
-            toggleItem.title = "启动代理"
-            statusItem.button?.title = "🔴"
+            stopProxyAndRestoreGPT()
         } else {
-            proxyManager.start()
-            toggleItem.title = "停止代理"
-            statusItem.button?.title = "🟡"
+            startProxyAndRoute()
         }
+    }
+
+    @objc private func switchToProxyRoute() {
+        startProxyAndRoute()
+    }
+
+    @objc private func switchToGPTRoute() {
+        stopProxyAndRestoreGPT()
     }
 
     @objc private func openEnv() {
@@ -149,7 +184,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var lines: [String] = []
         lines.append("# Codex Bridge — 自动生成")
         lines.append("PROXY_AUTH_KEY=\(authKey)")
-            if !deepseek.isEmpty { lines.append("MY_DS_KEY=\(deepseek)") }
+        if !deepseek.isEmpty { lines.append("DEEPSEEK_API_KEY=\(deepseek)") }
         if !mimo.isEmpty { lines.append("MIMO_API_KEY=\(mimo)") }
         if !openai.isEmpty { lines.append("OPENAI_API_KEY=\(openai)") }
         lines.append("DEEPSEEK_BASE_URL=https://api.deepseek.com/v1")
@@ -159,36 +194,102 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let content = lines.joined(separator: "\n")
 
         try? content.write(to: envPath, atomically: true, encoding: .utf8)
-        // 同时写入 ~/.codex/auth.json，使 Codex CLI 能直接连接
-        let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
-        let authPath = authDir.appendingPathComponent("auth.json")
-        try? FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
-        let authContent = "{\n  \"auth_mode\": \"apikey\",\n  \"OPENAI_API_KEY\": \"\(authKey)\"\n}\n"
-        try? authContent.write(to: authPath, atomically: true, encoding: .utf8)
-        // 提示用户配置 config.toml
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             let alert = NSAlert()
             alert.messageText = "配置完成"
-            alert.informativeText = "已自动写入 .env 和 auth.json。\n\n如果还没配置 Codex CLI，请编辑 ~/.codex/config.toml：\n\n[model_providers.你的供应商]\nbase_url = \"http://127.0.0.1:4000/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true"
+            alert.informativeText = "已自动写入 .env，并会在启动代理时把 Codex 切到 local_proxy；停止代理时会恢复 GPT 配置。"
             alert.addButton(withTitle: "知道了")
             alert.runModal()
         }
+        startProxyAndRoute()
+    }
+
+    private func startProxyAndRoute(showErrors: Bool = true) {
         proxyManager.start()
+        if proxyManager.isRunning {
+            do {
+                try codexConfig.switchToProxy()
+            } catch {
+                if showErrors { showConfigError("切换到代理模型失败", error) }
+            }
+        }
+        updateRouteMenu(proxyHealthy: proxyManager.isRunning)
+    }
+
+    private func startProxyOnly() {
+        proxyManager.start()
+        updateRouteMenu(proxyHealthy: proxyManager.isRunning)
+    }
+
+    private func stopProxyAndRestoreGPT(showErrors: Bool = true) {
+        proxyManager.stop()
+        do {
+            try codexConfig.switchToGPT()
+        } catch {
+            if showErrors { showConfigError("恢复 GPT 配置失败", error) }
+        }
+        updateRouteMenu(proxyHealthy: false)
+    }
+
+    private func showConfigError(_ title: String, _ error: Error) {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "知道了")
+            alert.runModal()
+        }
     }
 
     private func checkHealth() {
-        guard let url = URL(string: "http://127.0.0.1:4000/health") else { return }
+        guard let url = URL(string: "http://127.0.0.1:\(proxyPort())/health") else { return }
         let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
             DispatchQueue.main.async {
+                let healthy = error == nil
                 if error == nil {
-                    self?.statusItem.button?.title = "🟢"
-                    self?.toggleItem?.title = "停止代理"
+                    self?.toggleItem?.title = "停止代理并恢复 GPT"
                 } else if !(self?.proxyManager.isRunning ?? false) {
-                    self?.statusItem.button?.title = "🔴"
-                    self?.toggleItem?.title = "启动代理"
+                    self?.toggleItem?.title = "启动代理并切到代理"
                 }
+                self?.updateRouteMenu(proxyHealthy: healthy)
             }
         }
         task.resume()
+    }
+
+    private func updateRouteMenu(proxyHealthy: Bool?) {
+        let route = codexConfig.currentRoute()
+        routeItem?.title = "Codex: \(route.label)"
+        switchProxyItem?.state = route.isProxy ? .on : .off
+        switchGPTItem?.state = route.isProxy ? .off : .on
+
+        let routeMark = route.isProxy ? "代理" : "GPT"
+        if proxyHealthy == true {
+            statusItem.button?.title = "🟢 \(routeMark)"
+        } else if proxyManager.isRunning {
+            statusItem.button?.title = "🟡 \(routeMark)"
+        } else {
+            statusItem.button?.title = "🔴 \(routeMark)"
+        }
+    }
+
+    private func proxyPort() -> String {
+        envValue("PROXY_PORT") ?? "4000"
+    }
+
+    private func envValue(_ key: String) -> String? {
+        let envPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/codex-bridge/.env")
+        guard let content = try? String(contentsOf: envPath, encoding: .utf8) else { return nil }
+        for rawLine in content.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("#") || !line.hasPrefix("\(key)=") { continue }
+            var value = String(line.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces)
+            if (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
+                value = String(value.dropFirst().dropLast())
+            }
+            return value.isEmpty ? nil : value
+        }
+        return nil
     }
 }

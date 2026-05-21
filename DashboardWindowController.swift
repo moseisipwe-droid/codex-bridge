@@ -1,8 +1,7 @@
 import AppKit
 
 class DashboardWindowController: NSWindowController {
-    private let port = "4000"
-    private let baseURL: String
+    private var baseURL: String { "http://127.0.0.1:\(proxyPort())" }
     private var pollTimer: Timer?
     private var lastLogTS: Int = 0
     // 缓存当前供应商配置，供模型切换用
@@ -10,6 +9,7 @@ class DashboardWindowController: NSWindowController {
     private var currentEnabledList: [String] = []
     // 本地模型切换缓存（重启生效前暂存，防止轮询覆盖）
     private var pendingDefaultModels: [String: String] = [:]
+    private let codexConfig = CodexConfigManager()
 
     // 20个主流厂商模板
     private static let providerTemplates: [(keywords: [String], name: String, base: String, models: String)] = [
@@ -53,7 +53,6 @@ class DashboardWindowController: NSWindowController {
     override var windowNibName: NSNib.Name? { nil }
 
     init() {
-        baseURL = "http://127.0.0.1:\(port)"
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 520),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -551,14 +550,13 @@ class DashboardWindowController: NSWindowController {
 
     private func updateEnvFile(_ transform: @escaping (String) -> String) {
         guard let url = URL(string: "\(baseURL)/admin/api/config") else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+        URLSession.shared.dataTask(with: authorizedRequest(url: url)) { [weak self] data, _, _ in
             guard let self = self, let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let content = json["content"] as? String else { return }
 
             let newContent = transform(content)
-            var req = URLRequest(url: url)
-            req.httpMethod = "PUT"
+            var req = self.authorizedRequest(url: url, method: "PUT")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try? JSONSerialization.data(withJSONObject: ["content": newContent])
 
@@ -566,8 +564,7 @@ class DashboardWindowController: NSWindowController {
                 guard let self = self else { return }
                 // Save ok, now restart
                 guard let restartURL = URL(string: "\(self.baseURL)/admin/api/restart") else { return }
-                var rreq = URLRequest(url: restartURL)
-                rreq.httpMethod = "POST"
+                let rreq = self.authorizedRequest(url: restartURL, method: "POST")
                 URLSession.shared.dataTask(with: rreq).resume()
             }.resume()
         }.resume()
@@ -632,7 +629,7 @@ class DashboardWindowController: NSWindowController {
 
     private func fetchStatus() {
         guard let url = URL(string: "\(baseURL)/admin/api/status") else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, resp, _ in
+        URLSession.shared.dataTask(with: authorizedRequest(url: url)) { [weak self] data, resp, _ in
             guard let self = self else { return }
             if let data = data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 DispatchQueue.main.async { self.updateStatus(json) }
@@ -644,7 +641,7 @@ class DashboardWindowController: NSWindowController {
 
     private func fetchLogs() {
         guard let url = URL(string: "\(baseURL)/admin/api/logs-recent") else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+        URLSession.shared.dataTask(with: authorizedRequest(url: url)) { [weak self] data, _, _ in
             guard let self = self, let data = data,
                   let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
             DispatchQueue.main.async { self.appendLogs(entries) }
@@ -653,7 +650,7 @@ class DashboardWindowController: NSWindowController {
 
     private func showSetupBanner() {
         statusDot.layer?.backgroundColor = NSColor.systemRed.cgColor
-        statusText.stringValue = "代理未运行"
+        statusText.stringValue = "代理未运行 · Codex: \(codexConfig.currentRoute().label)"
         setupBanner.stringValue = "首次使用？编辑 ~/.codex/codex-bridge/.env 填入 API Key，然后点击菜单栏 → 启动代理"
     }
 
@@ -662,7 +659,7 @@ class DashboardWindowController: NSWindowController {
         setupBanner.stringValue = ""
 
         let p = d["port"] as? String ?? "4000"
-        statusText.stringValue = ":\(p) · 运行中"
+        statusText.stringValue = ":\(p) · 运行中 · Codex: \(codexConfig.currentRoute().label)"
 
         cardStatus.stringValue = "运行中"
         let uptimeSec = (d["uptime"] as? Int ?? 0) / 1000
@@ -744,5 +741,51 @@ class DashboardWindowController: NSWindowController {
 
     private func displayName(_ n: String) -> String {
         ["deepseek": "DeepSeek", "mimo": "MiMo", "openai": "OpenAI"][n] ?? n
+    }
+
+    private func authorizedRequest(url: URL, method: String = "GET") -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        if let key = adminAuthKey() {
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
+    private func proxyPort() -> String {
+        envValue("PROXY_PORT") ?? "4000"
+    }
+
+    private func adminAuthKey() -> String? {
+        if let key = envValue("PROXY_AUTH_KEY"), !key.isEmpty {
+            return key
+        }
+        guard let rawKeys = envValue("PROXY_KEYS") else { return nil }
+        for rawEntry in rawKeys.components(separatedBy: ",") {
+            let entry = rawEntry.trimmingCharacters(in: .whitespaces)
+            guard let sep = entry.lastIndex(of: ":") else { continue }
+            let key = String(entry[..<sep]).trimmingCharacters(in: .whitespaces)
+            let lock = String(entry[entry.index(after: sep)...]).trimmingCharacters(in: .whitespaces)
+            if !key.isEmpty && lock == "*" {
+                return String(key)
+            }
+        }
+        return nil
+    }
+
+    private func envValue(_ key: String) -> String? {
+        let envPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/codex-bridge/.env")
+        guard let content = try? String(contentsOf: envPath, encoding: .utf8) else { return nil }
+        for rawLine in content.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("#") || !line.hasPrefix("\(key)=") { continue }
+            var value = String(line.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces)
+            if (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
+                value = String(value.dropFirst().dropLast())
+            }
+            return value.isEmpty ? nil : value
+        }
+        return nil
     }
 }

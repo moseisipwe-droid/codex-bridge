@@ -7,7 +7,7 @@ BUILD_DIR="build"
 echo "==> 编译..."
 mkdir -p "$BUILD_DIR"
 swiftc -o "$BUILD_DIR/CodexBridge" \
-    main.swift AppDelegate.swift ProxyManager.swift DashboardWindowController.swift \
+    main.swift AppDelegate.swift ProxyManager.swift DashboardWindowController.swift CodexConfigManager.swift \
     -framework AppKit \
     -O
 

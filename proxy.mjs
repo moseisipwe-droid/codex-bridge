@@ -20,6 +20,7 @@ process.on("unhandledRejection", (err) => {
 });
 
 const PORT = process.env.PROXY_PORT || 4000;
+const HOST = process.env.PROXY_HOST || "127.0.0.1";
 
 // === Logging ===
 //
@@ -163,8 +164,60 @@ loadProxyKeyTable();
 
 const PROXY_AUTH_ENABLED = PROXY_KEY_TABLE.size > 0;
 
+function getBearerToken(req) {
+  const header = req.headers["authorization"] || "";
+  return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+}
+
+function rejectProxyAuth(req, res, statusCode, message, code) {
+  const presented = getBearerToken(req);
+  if (process.env.ACCESS_LOG !== "0") {
+    log.access(`[access] ${statusCode} auth denied (presented=${presented ? presented.slice(0, 8) + "…" : "<none>"})`);
+  }
+  sendJson(res, statusCode, {
+    error: {
+      message,
+      type: "invalid_request_error",
+      code,
+    },
+  });
+}
+
+function authorizeProxyRequest(req, res, { admin = false } = {}) {
+  if (!PROXY_AUTH_ENABLED) return "*";
+  if (!admin && isLoopbackRequest(req)) return "*";
+  const presented = getBearerToken(req);
+  const lock = presented ? PROXY_KEY_TABLE.get(presented) : undefined;
+  if (!lock) {
+    rejectProxyAuth(
+      req,
+      res,
+      401,
+      "Invalid or missing proxy key. Set Authorization: Bearer <key> using one of the keys configured in PROXY_KEYS or PROXY_AUTH_KEY.",
+      "proxy_auth_required"
+    );
+    return null;
+  }
+  if (admin && lock !== "*") {
+    rejectProxyAuth(
+      req,
+      res,
+      403,
+      "Admin endpoints require an unrestricted proxy key. Use PROXY_AUTH_KEY or a PROXY_KEYS entry locked to '*'.",
+      "proxy_admin_auth_required"
+    );
+    return null;
+  }
+  return lock;
+}
+
+function isLoopbackRequest(req) {
+  const addr = req.socket?.remoteAddress || "";
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
 const DEEPSEEK_BASE = process.env.DEEPSEEK_BASE_URL || process.env.DEEPSEEK_API_BASE || "https://api.deepseek.com/v1";
-const DEEPSEEK_KEY = process.env.MY_DS_KEY || "";
+const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY || process.env.MY_DS_KEY || "";
 const DEEPSEEK_MODELS = parseCsv(process.env.DEEPSEEK_MODELS || "deepseek-v4-pro,deepseek-v4-flash");
 
 const MIMO_BASE = process.env.MIMO_BASE_URL || "https://token-plan-cn.xiaomimimo.com/v1";
@@ -191,7 +244,7 @@ function getGithubToken() {
 }
 
 if (!DEEPSEEK_KEY && !OPENAI_KEY && !MIMO_KEY) {
-  console.error("At least one upstream provider key is required: set MY_DS_KEY, MIMO_API_KEY, and/or OPENAI_API_KEY");
+  console.error("At least one upstream provider key is required: set DEEPSEEK_API_KEY, MIMO_API_KEY, and/or OPENAI_API_KEY");
   process.exit(1);
 }
 
@@ -235,7 +288,7 @@ if (CATALOG) {
 // (Responses-API ⇄ Chat-Completions translation, web_fetch injection, streaming bridge, etc.).
 // Add new ones (Kimi, Zhipu, ...) by appending another entry — no other code changes needed.
 const OAI_COMPAT_PROVIDERS = {
-  deepseek: { base: DEEPSEEK_BASE, key: DEEPSEEK_KEY, models: DEEPSEEK_MODELS, defaultModel: DEEPSEEK_MODELS[0] || "deepseek-v4-pro", envKey: "MY_DS_KEY" },
+  deepseek: { base: DEEPSEEK_BASE, key: DEEPSEEK_KEY, models: DEEPSEEK_MODELS, defaultModel: DEEPSEEK_MODELS[0] || "deepseek-v4-pro", envKey: "DEEPSEEK_API_KEY" },
   mimo:     { base: MIMO_BASE,     key: MIMO_KEY,     models: MIMO_MODELS,     defaultModel: MIMO_MODELS[0]     || "mimo-v2.5-pro",   envKey: "MIMO_API_KEY"     },
 };
 
@@ -485,6 +538,13 @@ function resolveProviderForModel(model) {
     }
   }
   return getFallbackProvider();
+}
+
+function modelForProvider(cfg, requestedModel) {
+  const requested = String(requestedModel || "").trim();
+  if (!requested) return cfg.defaultModel;
+  const allowed = new Set((cfg.models || []).map((m) => normalizeModelId(m)));
+  return allowed.has(normalizeModelId(requested)) ? requested : cfg.defaultModel;
 }
 
 // Read with LRU bookkeeping: refreshes insertion order so frequently-used roots
@@ -1728,8 +1788,7 @@ async function handleOaiCompatResponses(req, provider, body, res, originalInput)
   }
 
   const chatReq = responsesRequestToChatCompletions(body, provider);
-  // 始终使用 Dashboard 设置的 defaultModel
-  chatReq.model = cfg.defaultModel;
+  chatReq.model = modelForProvider(cfg, chatReq.model);
   const useModel = chatReq.model;
   const isStream = chatReq.stream;
 
@@ -1841,7 +1900,7 @@ async function handleOaiCompatChatCompletions(req, provider, body, res) {
     return;
   }
 
-  body.model = cfg.defaultModel;
+  body.model = modelForProvider(cfg, body.model);
   const isStream = body.stream || false;
 
   const validated = normalizeMessages(body.messages || [], { coerceStrings: true });
@@ -2341,7 +2400,7 @@ td{color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,
       }
 
       // DeepSeek
-      setVal('ds-key','MY_DS_KEY','');
+      var dsKeyEl=$('ds-key');if(dsKeyEl)dsKeyEl.value=env['DEEPSEEK_API_KEY']||env['MY_DS_KEY']||'';
       var dsBase=env['DEEPSEEK_BASE_URL']||env['DEEPSEEK_API_BASE']||'https://api.deepseek.com/v1';
       var dsEl=$('ds-base');if(dsEl)dsEl.value=dsBase;
       setVal('ds-models','DEEPSEEK_MODELS','deepseek-v4-pro,deepseek-v4-flash');
@@ -2381,7 +2440,7 @@ td{color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,
     ];
     function add(k,v){if(v.trim())lines.push(k+'='+v.trim())}
 
-    var dsKey=$('ds-key');if(dsKey)add('MY_DS_KEY',dsKey.value);
+    var dsKey=$('ds-key');if(dsKey)add('DEEPSEEK_API_KEY',dsKey.value);
     var dsBase=$('ds-base');if(dsBase&&dsKey&&dsKey.value.trim())add('DEEPSEEK_BASE_URL',dsBase.value);
     var dsModels=$('ds-models');if(dsModels&&dsKey&&dsKey.value.trim())add('DEEPSEEK_MODELS',dsModels.value);
 
@@ -2398,7 +2457,7 @@ td{color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,
     var ak=$('auth-key');if(ak)add('PROXY_AUTH_KEY',ak.value);
 
     // All keys handled by form fields (even if empty — user intentionally cleared them)
-    var formKeys=['MY_DS_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODELS','MIMO_API_KEY','MIMO_BASE_URL','MIMO_MODELS','OPENAI_API_KEY','OPENAI_BASE_URL','OPENAI_MODELS','DEFAULT_PROVIDER','PROXY_PORT','PROXY_AUTH_KEY'];
+    var formKeys=['DEEPSEEK_API_KEY','MY_DS_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODELS','MIMO_API_KEY','MIMO_BASE_URL','MIMO_MODELS','OPENAI_API_KEY','OPENAI_BASE_URL','OPENAI_MODELS','DEFAULT_PROVIDER','PROXY_PORT','PROXY_AUTH_KEY'];
 
     // Preserve unknown keys from the raw editor
     var raw=$('configEditor');
@@ -2491,24 +2550,10 @@ const server = http.createServer(async (req, res) => {
   // On success, req.lockedProvider is set to "deepseek" / "mimo" / "openai" / "*".
   req.lockedProvider = "*";
   if (PROXY_AUTH_ENABLED) {
-    const isPublic = req.url === "/health" || req.url === "/" || req.url.startsWith("/admin/");
+    const isPublic = req.url === "/health" || req.url === "/";
     if (!isPublic) {
-      const header = req.headers["authorization"] || "";
-      const presented = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-      const lock = presented ? PROXY_KEY_TABLE.get(presented) : undefined;
-      if (!lock) {
-        if (process.env.ACCESS_LOG !== "0") {
-          log.access(`[access] 401 unauthorized (presented=${presented ? presented.slice(0, 8) + "…" : "<none>"})`);
-        }
-        sendJson(res, 401, {
-          error: {
-            message: "Invalid or missing proxy key. Set Authorization: Bearer <key> using one of the keys configured in PROXY_KEYS or PROXY_AUTH_KEY.",
-            type: "invalid_request_error",
-            code: "proxy_auth_required",
-          },
-        });
-        return;
-      }
+      const lock = authorizeProxyRequest(req, res, { admin: req.url.startsWith("/admin/") });
+      if (!lock) return;
       req.lockedProvider = lock;
     }
   }
@@ -2523,7 +2568,8 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Admin dashboard routes (no auth required)
+  // Admin dashboard routes. When inbound auth is configured, these require an
+  // unrestricted proxy key because /api/config can read/write local secrets.
   if (req.url.startsWith("/admin/")) {
     const p = req.url.slice(6);
     if (p === "" || p === "/") {
@@ -2789,8 +2835,8 @@ server.on("error", (err) => {
   console.error(`[codex-bridge] Server error:`, err.message);
 });
 
-server.listen(PORT, () => {
-  console.log(`[codex-bridge] Listening on http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`[codex-bridge] Listening on http://${HOST}:${PORT}`);
   console.log(`[codex-bridge] Default provider: ${getFallbackProvider()}`);
   for (const [name, cfg] of Object.entries(OAI_COMPAT_PROVIDERS)) {
     const label = name.charAt(0).toUpperCase() + name.slice(1);
@@ -2799,7 +2845,7 @@ server.listen(PORT, () => {
   console.log(`[codex-bridge] OpenAI  : ${OPENAI_KEY ? `${OPENAI_BASE} | models=${OPENAI_MODELS.join(", ")}` : "DISABLED"}`);
   console.log(`[codex-bridge] GitHub  : ${process.env.GITHUB_TOKEN ? "authenticated (env)" : "lazy (will run `gh auth token` on first api.github.com fetch)"}`);
   if (!PROXY_AUTH_ENABLED) {
-    console.log(`[codex-bridge] Inbound : OPEN — anyone on localhost can use this proxy (set PROXY_AUTH_KEY or PROXY_KEYS to lock down)`);
+    console.log(`[codex-bridge] Inbound : OPEN on ${HOST} — set PROXY_AUTH_KEY or PROXY_KEYS to lock down`);
   } else {
     console.log(`[codex-bridge] Inbound : auth required (${PROXY_KEY_TABLE.size} key${PROXY_KEY_TABLE.size === 1 ? "" : "s"} loaded)`);
     for (const [key, lock] of PROXY_KEY_TABLE) {

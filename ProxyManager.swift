@@ -38,9 +38,12 @@ class ProxyManager {
             }
             return false
         }
-        // 检查 .env 是否已配置（至少替换了占位符）
+        // 检查 .env 是否已配置（至少替换了占位符，且有任一上游 key）
         guard let content = try? String(contentsOf: envPath, encoding: .utf8) else { return false }
-        if content.contains("your-deepseek-key-here") || content.contains("replace-with-48-char-hex") || !content.contains("MY_DS_KEY") {
+        let hasUpstreamKey = ["DEEPSEEK_API_KEY", "MY_DS_KEY", "MIMO_API_KEY", "OPENAI_API_KEY"].contains {
+            !(envValue($0, in: content)?.isEmpty ?? true)
+        }
+        if content.contains("your-deepseek-key-here") || content.contains("replace-with-48-char-hex") || !hasUpstreamKey {
             return false
         }
         return true
@@ -171,6 +174,19 @@ class ProxyManager {
                 try? data.write(to: url)
             }
         }
+    }
+
+    private func envValue(_ key: String, in content: String) -> String? {
+        for rawLine in content.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("#") || !line.hasPrefix("\(key)=") { continue }
+            var value = String(line.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces)
+            if (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
+                value = String(value.dropFirst().dropLast())
+            }
+            return value
+        }
+        return nil
     }
 
     private func findNode() -> String? {

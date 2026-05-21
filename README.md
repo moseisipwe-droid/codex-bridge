@@ -34,6 +34,8 @@ Codex Bridge 是一个 macOS 原生菜单栏应用，内置本地代理引擎（
 ### 原生 macOS 菜单栏应用
 - 纯 AppKit 实现，无 WebView/SwiftUI
 - 菜单栏图标，一键启动/停止代理
+- 菜单栏直接显示 Codex 当前路由（GPT 或代理模型）
+- 停止代理时自动恢复 GPT 配置
 - 快捷键 `Cmd+W` 开关仪表盘窗口
 - 无 Dock 图标（`LSUIElement=true`）
 
@@ -83,6 +85,7 @@ open build/Codex\ Bridge.app
    # ~/.codex/codex-bridge/.env
    PROXY_AUTH_KEY=sk-proxy-local-$(openssl rand -hex 24)
    DEEPSEEK_API_KEY=sk-...   # 你的 API Key
+   # 可选：PROXY_HOST=127.0.0.1（默认，只允许本机访问）
    ```
 4. 点击菜单栏图标 → **启动代理**
 
@@ -167,7 +170,7 @@ codex-bridge/
 |------|------|------|
 | 代理无法启动 | Node.js 未安装 | `brew install node` |
 | `EADDRINUSE :4000` | 端口被占用 | `lsof -ti:4000 \| xargs kill` 或改 `.env` 中的 `PROXY_PORT` |
-| `401 Unauthorized` | 鉴权不匹配 | 检查 `auth.json` 与 `.env` 的密钥一致 |
+| `401 Unauthorized` | 鉴权不匹配 | 检查 `auth.json` 与 `.env` 的密钥一致；管理接口需要 `PROXY_AUTH_KEY` 或 `PROXY_KEYS` 中 `:*` 的密钥 |
 | SSL 证书错误 | 缺少 CA 证书 | 在 `.env` 中设置 `NODE_EXTRA_CA_CERTS` |
 | 模型无响应 | 供应商 API 密钥无效 | 检查仪表盘中的密钥状态 |
 
