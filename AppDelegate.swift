@@ -159,6 +159,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let content = lines.joined(separator: "\n")
 
         try? content.write(to: envPath, atomically: true, encoding: .utf8)
+        // 同时写入 ~/.codex/auth.json，使 Codex CLI 能直接连接
+        let authDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        let authPath = authDir.appendingPathComponent("auth.json")
+        try? FileManager.default.createDirectory(at: authDir, withIntermediateDirectories: true)
+        let authContent = "{\n  \"OPENAI_API_KEY\": \"\(authKey)\"\n}\n"
+        try? authContent.write(to: authPath, atomically: true, encoding: .utf8)
         proxyManager.start()
     }
 
