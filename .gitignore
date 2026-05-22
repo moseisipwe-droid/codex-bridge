@@ -1,0 +1,7 @@
+node_modules/
+.env
+*.log
+gpt-*.backup.*
+.DS_Store
+.claude/
+build/
